@@ -36,3 +36,17 @@ or if you are installing from source:
     pip3 install . --no-deps
 
 If you get an error [about `syft_proto`](https://github.com/OpenMined/PySyft/issues/2921), install that separately with `pip3 install syft-proto`.
+
+
+# Usage Instructions
+
+Launch 4 workers in 4 separate terminals.
+
+    python3 run_worker.py --port 8182 --host localhost --id 0 --verbose
+    python3 run_worker.py --port 8183 --host localhost --id 1 --verbose
+    python3 run_worker.py --port 8184 --host localhost --id 2 --verbose
+    python3 run_worker.py --port 8185 --host localhost --id 3 --verbose
+
+Then run the main program.
+
+    python3 main.py
