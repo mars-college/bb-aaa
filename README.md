@@ -5,7 +5,7 @@ This is a project to create a prototype of an [autonomous artificial artist (AAA
 The first design is to instantiate and train on an ongoing basis a [federated VAE using PySyft](https://github.com/OpenMined/PySyft).
 
 
-# Setting up Raspberry Pi for PySyft
+# Setting up Raspberry Pi for PySyft and PyGrid
 
 Boot up Pi. To find your device, search for devices connected to network with `arp -a` and any Pis mac address starts with `b8:27:eb`. Make note of yours and ssh into the Pi `ssh pi@<your_rpi_ip>`.
 
@@ -15,25 +15,22 @@ Install pre-requisites for PyTorch.
 
     sudo apt install libopenblas-dev libblas-dev libatlas-base-dev m4 cmake cython python3-dev python3-yaml python3-setuptools python3-pip
 
-Download a wheel to Install PyTorch for your Pi's specific architecture (can be found with `uname -a`). For Pi 4 (armv71), [this repository](https://github.com/sungjuGit/Pytorch-and-Vision-for-Raspberry-Pi-4B) works:
+### Install PySyft and PyGrid
 
-    git clone https://github.com/sungjuGit/Pytorch-and-Vision-for-Raspberry-Pi-4B
-    cd Pytorch-and-Vision-for-Raspberry-Pi-4B
-    pip3 install torch-1.4.0a0+f43194e-cp37-cp37m-linux_armv7l.whl
-    pip3 install torchvision-0.5.0a0+9cdc814-cp37-cp37m-linux_armv7l.whl 
+If we install PyGrid library, we will get PySyft installed as a dependency. Since Grid and Syft is currently under development, it is recommended to install PyGrid from the BRAHMAN-AI fork:
 
-*Note* If PySyft fails later for your version of PyTorch, fall back to [this build of PyTorch 1.3](https://discuss.pytorch.org/t/pytorch-1-3-wheels-for-raspberry-pi-python-3-7/58580) instead.
 
-### Install PySyft
+    git clone https://github.com/brahman-ai/PyGrid
+    cd PyGrid
+    pip3 install -r requirements.txt
+    python3 setup.py install
 
-    pip3 install Flask flask-socketio lz4 msgpack websockets zstd tblib
-    pip3 install syft
+Executing `pip3 list | grep "syft\|grid"` should display an output like:
 
-or if you are installing from source:
 
-    git clone https://github.com/OpenMined/PySyft
-    cd PySyft
-    pip3 install . --no-deps
+    grid               0.1.0.0a1.dev440
+    syft               0.2.2a1-brahman  /home/pi/brahman/venv/src/syft
+    syft-proto         0.1.0a1.post38
 
 If you get an error [about `syft_proto`](https://github.com/OpenMined/PySyft/issues/2921), install that separately with `pip3 install syft-proto`.
 
@@ -50,3 +47,56 @@ Launch 4 workers in 4 separate terminals.
 Then run the main program.
 
     python3 main.py
+
+# Setting up a Grid Gateway
+
+Install Gateway requirements:
+
+    cd PyGrid/gateway/
+    pip3 install -r requirements.txt
+
+Now we can start a gateway with:
+
+    python3 gateway.py --start_local_db --port=5000
+
+The IP of the Pi where the Gateway is executed will be needed when launching Grid Nodes, as shown in the instructions below.
+
+# Setting up a Grid Node
+
+Install Node requirements:
+
+    cd PyGrid/app/websocket
+    pip3 install -r requirements.txt
+
+Now we can start a node, providing the Gateway IP and port:
+
+    python3 websocket_app.py --start_local_db --id=bob --port=3000 --gateway_url=http://<GATEWAY_IP>:5000
+
+
+# Grid usage example
+
+
+### Public Grid Network
+
+    import torch as th
+    import syft as sy
+
+    hook = sy.TorchHook(th)
+
+    gateway = sy.grid.public_grid.PublicGridNetwork(hook, gateway_url="http://<GATEWAY_IP>:5000")
+
+    bob = sy.grid.public_grid.NodeClient(hook, address="http://<BOB_NODE_IP>:3000")
+    bob.connect()
+
+    alice = sy.grid.public_grid.NodeClient(hook, address="http://<ALICE_NODE_IP>:3000")
+    alice.connect()
+
+    x = th.tensor([1, 2, 3, 4, 5]).tag("#bombay_beach_data").send(bob)
+    y = th.tensor([10, 20, 30, 40, 50]).tag("#bombay_beach_data").send(alice)
+
+    gateway.search("#bombay_beach_data")
+    #{'bob': [(Wrapper)>[PointerTensor | me:36135518786 -> bob:28833842327]
+    #    Tags: #bombay_beach_data
+    #    Shape: torch.Size([5])], 'alice': [(Wrapper)>[PointerTensor | me:71446878279 -> alice:1834179188]
+    #    Tags: #bombay_beach_data
+    #    Shape: torch.Size([5])]}
