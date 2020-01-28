@@ -53,6 +53,14 @@ federated_train_loader = sy.FederatedDataLoader( # <-- this is now a FederatedDa
     batch_size=batch_size, shuffle=True, **kwargs)
 
 
+
+# data loader
+federated_train_loader = sy.FederatedDataLoader( # <-- this is now a FederatedDataLoader 
+    torchvision.datasets.MNIST(root='data', 
+                   train=True, download=True, transform=transforms.ToTensor()), 
+    batch_size=batch_size, shuffle=True, **kwargs)
+
+
 class VAE(nn.Module):
     def __init__(self, image_size=784, h_dim=400, z_dim=20):
         super(VAE, self).__init__()
@@ -84,6 +92,7 @@ class VAE(nn.Module):
     
 model = VAE().to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
 
 for epoch in range(num_epochs):
     for batch_idx, (data, target) in enumerate(federated_train_loader): 

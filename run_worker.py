@@ -7,10 +7,23 @@ import syft as sy
 from syft.workers.websocket_server import WebsocketServerWorker
 
 
+
+hook = sy.TorchHook(torch)
+
+local_worker = None
+x_ptr = None
+
+
+def get_next(hook, local_worker):
+    global x_ptr
+    x_ptr = torch.ones(3, 1).tag('#mydata').send(local_worker)
+
+
 async def update_worker(loop: asyncio.AbstractEventLoop) -> None:
     while True:
-        # do stuff here
-        time.sleep(1)
+        get_next(hook, local_worker)
+        #print(local_worker._objects)
+        time.sleep(8)
 
 
 def start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -27,8 +40,6 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true", help="if set, websocket server worker will be started in verbose mode")
     args = parser.parse_args()
 
-    hook = sy.TorchHook(torch)
-
     kwargs = {
         "id": str(args.id),
         "host": args.host,
@@ -39,11 +50,12 @@ def main():
 
     global local_worker
     local_worker = WebsocketServerWorker(**kwargs)
-    local_worker.start()  
-    
     loop = asyncio.new_event_loop()
+
     update_thread = Thread(target=start_background_loop, args=(loop,), daemon=True)
     update_thread.start()
+
+    local_worker.start()      
 
 
 if __name__== "__main__":
