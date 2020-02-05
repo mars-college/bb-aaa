@@ -11,7 +11,7 @@ from syft.workers.websocket_server import WebsocketServerWorker
 
 # setup mnist
 use_cuda = torch.cuda.is_available()
-trans = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (1.0,))])
+trans = transforms.ToTensor() #transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (1.0,))])
 mnist = datasets.MNIST(root='./data', train=True, transform=trans, download=True)
 mnist_loader = torch.utils.data.DataLoader(dataset=mnist, batch_size=1, shuffle=True)
 mnist_iterator = iter(mnist_loader)
@@ -23,10 +23,13 @@ hook = sy.TorchHook(torch)
 local_worker = None
 x_ptr, y_ptr = None, None
 
+image_size = 784
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def get_next(hook, local_worker):
     global x_ptr, y_ptr
     x, y = next(mnist_iterator)
+    x = x.view(-1, image_size)
     x_ptr = x.tag('#x').send(local_worker)
     y_ptr = y.tag('#y').send(local_worker)
 
@@ -35,7 +38,7 @@ async def update_worker(loop: asyncio.AbstractEventLoop) -> None:
     while True:
         get_next(hook, local_worker)
         #print(local_worker._objects)
-        time.sleep(1)
+        time.sleep(5)
 
 
 def start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
