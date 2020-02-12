@@ -70,7 +70,7 @@ class Worker:
     def activate(self):
         kwargs = { "hook": self.hook,
             "id": self.name,
-            "host": self.conductor_ip,
+            "host": "0.0.0.0",
             "port": self.syft_port }
         self.active = True
         self.local_worker = WebsocketServerWorker(**kwargs)
