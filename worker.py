@@ -50,7 +50,7 @@ class Worker:
             
     def setup_data(self, image_size):
         self.image_size = image_size
-        trans = transforms.ToTensor() #transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (1.0,))])
+        trans = transforms.ToTensor() 
         mnist_loader = torch.utils.data.DataLoader(
             dataset=datasets.MNIST(root='./data', train=True, transform=trans, download=True), 
             batch_size=self.batch_size, shuffle=True)

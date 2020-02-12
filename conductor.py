@@ -21,9 +21,6 @@ class CheckableQueue(queue.Queue):
             return item in self.queue
 
 
-
-
-
 class VAE(nn.Module):
     
     def __init__(self, image_size=784, h_dim=400, z_dim=20):
@@ -94,49 +91,23 @@ async def update_model(loop: asyncio.AbstractEventLoop, workers, model, optimize
 
             print('UPDATE for %s' % next_worker_name, worker)
 
-
-#            time.sleep(20)
-
-            print('model 1')
             model.send(worker)
-            print('model 2')
-            x, y = worker.search('#x')[0], worker.search('#y')[0]
-            print('model 3')
-
-            #x, y = x.to(device).view(-1, image_size), y.to(device)
-
-            #model.send(px.location) 
-            print('-----')
-
-            print('model 4')
+            x, _ = worker.search('#x')[0], worker.search('#y')[0]
             x_reconst, mu, log_var = model(x)
-            print('model 5')
-
             reconst_loss = F.binary_cross_entropy(x_reconst, x, size_average=False)
-            print('model 6')
             kl_div = - 0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
-            print('model 7')
             
             # backward
-            print('model 8')
             loss = reconst_loss + kl_div
-            print('model 9')
             optimizer[worker].zero_grad()
-            print('model 10')
             loss.backward()
-            print('model 11')
             optimizer[worker].step()
-            print('model 12')
-
             model.get()
-
 
             print("Reconst Loss: {:.4f}, KL Div: {:.4f}".format(reconst_loss.get(), kl_div.get()))
 
-
-
             update_queue.get()
-            print("--->finished update for, now len", update_queue.qsize())
+            
         time.sleep(1)
 
 
@@ -159,6 +130,7 @@ def main():
     # initialize model and workers
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = VAE(image_size=args.image_size, h_dim=args.h_dim, z_dim=args.z_dim).to(device)
+    
     optimizer = {}
     workers, update_queue = {}, CheckableQueue()
     
@@ -171,7 +143,7 @@ def main():
     hook = sy.TorchHook(torch)
     start_server = websockets.serve(
         functools.partial(handle_worker, hook=hook, workers=workers, update_queue=update_queue, model=model, optimizer=optimizer),
-        'localhost', args.server_port)
+        '0.0.0.0', args.server_port)
     asyncio.get_event_loop().run_until_complete(start_server)
     asyncio.get_event_loop().run_forever()
 
