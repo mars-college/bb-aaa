@@ -1,6 +1,7 @@
 from threading import Thread
 from socket import gethostbyname_ex, gethostname
 from enum import Enum
+from sys import platform
 import argparse
 import time
 import asyncio
@@ -13,7 +14,13 @@ import torchvision.transforms as transforms
 import syft as sy
 from syft.workers.websocket_server import WebsocketServerWorker
 
-
+if platform == "linux" or platform == "linux2":
+    from pyroute2 import IPRoute
+    ip = IPRoute()
+    local_ip_address = dict(ip.get_addr(label='eth0')[0]['attrs'])['IFA_LOCAL']
+elif platform == "darwin":
+    from socket import gethostbyname_ex, gethostname
+    local_ip_address = gethostbyname_ex(gethostname())[-1][-1]
 
 
 class Worker:
@@ -80,7 +87,7 @@ class Worker:
     async def try_register(self):
         print('Register with conductor')
         async with websockets.connect(self.socket_uri) as websocket:
-            message = json.dumps({'action': 'register', 'name': self.name, 'syft_port': self.syft_port, 'host': gethostbyname_ex(gethostname())[-1][-1]})
+            message = json.dumps({'action': 'register', 'name': self.name, 'syft_port': self.syft_port, 'host': local_ip_address})
             await websocket.send(message)
             result = json.loads(await websocket.recv())
             if result['success']:
