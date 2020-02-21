@@ -53,9 +53,6 @@ class VAE(nn.Module):
     
 
 
-
-
-    
 async def handle_worker(websocket, path, hook, workers, update_queue, model, optimizer):
     message = await websocket.recv()
     message = json.loads(message)
@@ -85,6 +82,7 @@ async def handle_worker(websocket, path, hook, workers, update_queue, model, opt
 async def update_model(loop: asyncio.AbstractEventLoop, workers, model, optimizer, update_queue) -> None:
     while True:       
         print("queue is", update_queue.empty(), update_queue.qsize())
+        counter = 0
         while not update_queue.empty():
             next_worker_name = update_queue.queue[0]
             worker = workers[next_worker_name]
@@ -106,6 +104,10 @@ async def update_model(loop: asyncio.AbstractEventLoop, workers, model, optimize
 
             print("Reconst Loss: {:.4f}, KL Div: {:.4f}".format(reconst_loss.get(), kl_div.get()))
 
+            #counter += 1
+            #img_reconst = np.clip(255 * x_reconst.get().reshape([64, 64]).detach().numpy(), 0, 255)
+            #Image.fromarray(img_reconst.astype(np.uint8)).convert('RGB').save('myImage%02d.png' % counter)
+
             update_queue.get()
             
         time.sleep(1)
@@ -121,7 +123,7 @@ def start_background_loop(loop: asyncio.AbstractEventLoop, workers, model, optim
 def main():
     parser = argparse.ArgumentParser(description="Run websocket client.")
     parser.add_argument("--server_port", "-p", type=int, default=8765, help="port number to send messages to conductor, e.g. --msg_port 8765")    
-    parser.add_argument("--image_size", "-i", type=int, default=784, help="image size")    
+    parser.add_argument("--image_size", "-i", type=int, default=64 * 64, help="image size")    
     parser.add_argument("--h_dim", "-d", type=int, default=300, help="neurons in hidden layers")    
     parser.add_argument("--z_dim", "-z", type=int, default=20, help="dimensionality of latent space")    
     parser.add_argument("--learning_rate", "-l", type=float, default=1e-3, help="learning rate of optimizer")    

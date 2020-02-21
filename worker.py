@@ -2,25 +2,34 @@ from threading import Thread
 from socket import gethostbyname_ex, gethostname
 from enum import Enum
 from sys import platform
+from PIL import Image
 import argparse
 import time
 import asyncio
 import websockets
+import io
+import picamera
 import os
 import json
+import numpy as np
 import torch
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 import syft as sy
 from syft.workers.websocket_server import WebsocketServerWorker
 
-if platform == "linux" or platform == "linux2":
-    from pyroute2 import IPRoute
-    ip = IPRoute()
-    local_ip_address = dict(ip.get_addr(label='eth0')[0]['attrs'])['IFA_LOCAL']
-elif platform == "darwin":
-    from socket import gethostbyname_ex, gethostname
-    local_ip_address = gethostbyname_ex(gethostname())[-1][-1]
+
+
+def get_local_ip_address():
+    if platform == "linux" or platform == "linux2":
+        from pyroute2 import IPRoute
+        ip = IPRoute()
+        label = 'wlan0' if ip.get_addr(label='wlan0') != () else 'eth0'
+        local_ip_address = dict(ip.get_addr(label=label)[0]['attrs'])['IFA_LOCAL']
+    elif platform == "darwin":
+        from socket import gethostbyname_ex, gethostname
+        local_ip_address = gethostbyname_ex(gethostname())[-1][-1]
+    return local_ip_address
 
 
 class Worker:
@@ -30,8 +39,9 @@ class Worker:
         READY_TO_UPDATE = 2
         WAITING = 3
 
-    def __init__(self, name, conductor_ip, conductor_port, syft_port, batch_size, hook):
+    def __init__(self, name, worker_ip, conductor_ip, conductor_port, syft_port, batch_size, hook):
         self.name = name
+        self.worker_ip = get_local_ip_address() if worker_ip == 'auto' else worker_ip
         self.conductor_ip = conductor_ip
         self.conductor_port = conductor_port
         self.syft_port = syft_port
@@ -61,11 +71,14 @@ class Worker:
         return ready
 
     def get_next_batch(self):
-        print('Get next batch of mnist')
-        x, y = next(self.mnist_iterator)
-        x = x.view(-1, self.image_size)
-        self.x_ptr = x.tag('#x').send(self.local_worker)
-        self.y_ptr = y.tag('#y').send(self.local_worker)
+        print('Get next batch')
+        #x, y = next(self.mnist_iterator)
+        #x = x.view(-1, self.image_size)
+        #self.x_ptr = x.tag('#x').send(self.local_worker)
+        #self.y_ptr = y.tag('#y').send(self.local_worker)
+        img = torch.tensor(np.array(self.captures).astype(np.float32)/255.)
+        img = img.view(-1, self.image_size)
+        self.x_ptr = img.tag('#x').send(self.local_worker)
         
     def activate(self):
         kwargs = { "hook": self.hook,
@@ -77,8 +90,16 @@ class Worker:
         self.local_worker.start()
 
     async def capture(self):
-        print('run the camera')
-        image = None
+        print('Run the camera')
+        stream = io.BytesIO()
+        with picamera.PiCamera() as camera:
+            camera.start_preview()
+            time.sleep(1)
+            camera.capture(stream, format='jpeg')
+        stream.seek(0)
+        image = Image.open(stream)
+        image = image.resize((64, 64), Image.BICUBIC)
+        image = np.array(image).astype(np.uint8)[:, :, 0]
         self.captures.append(image)
 
     def num_captures(self):
@@ -87,7 +108,7 @@ class Worker:
     async def try_register(self):
         print('Register with conductor')
         async with websockets.connect(self.socket_uri) as websocket:
-            message = json.dumps({'action': 'register', 'name': self.name, 'syft_port': self.syft_port, 'host': local_ip_address})
+            message = json.dumps({'action': 'register', 'name': self.name, 'syft_port': self.syft_port, 'host': get_local_ip_address()})
             await websocket.send(message)
             result = json.loads(await websocket.recv())
             if result['success']:
@@ -101,7 +122,7 @@ class Worker:
             await websocket.send(message)
             result = json.loads(await websocket.recv())
             if result['success']:
-                print('ready to make an update...')
+                print('Ready to make an update...')
     
     async def check_if_in_queue(self):
         async with websockets.connect(self.socket_uri) as websocket:
@@ -150,6 +171,7 @@ def start_background_loop(loop: asyncio.AbstractEventLoop, worker) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Run websocket server worker.")
     parser.add_argument("--name", type=str, help="name of the worker, e.g. worker001")
+    parser.add_argument("--worker_ip", type=str, default="auto", help="ip address of worker (if \"auto\", then find automatically, otherwise override")
     parser.add_argument("--conductor_ip", type=str, default="0.0.0.0", help="host for the socket connection")
     parser.add_argument("--conductor_port", type=int, default=8765, help="port number of the websocket server worker, e.g. --conductor_port 8765")
     parser.add_argument("--syft_port", type=int, help="port for syft worker")
@@ -160,8 +182,8 @@ def main():
     
     # setup worker
     hook = sy.TorchHook(torch)
-    worker = Worker(args.name, args.conductor_ip, args.conductor_port, args.syft_port, args.batch_size, hook)    
-    worker.setup_data(784)
+    worker = Worker(args.name, args.worker_ip, args.conductor_ip, args.conductor_port, args.syft_port, args.batch_size, hook)    
+    worker.setup_data(64 * 64)
     worker.set_mode(Worker.Mode.CAPTURING)
 
     # setup update thread
