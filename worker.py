@@ -2,13 +2,14 @@ from threading import Thread
 from socket import gethostbyname_ex, gethostname
 from enum import Enum
 from sys import platform
-from PIL import Image
+from PIL import ImageDraw, ImageFont, Image
 import argparse
 import time
 import asyncio
 import websockets
 import io
 import os
+import time
 import json
 import numpy as np
 import cv2
@@ -20,6 +21,52 @@ from syft.workers.websocket_server import WebsocketServerWorker
 
 # USE_PICAMERA = False
 
+
+
+gui = None
+
+
+
+
+
+# gui settings
+FONT = '/Users/gene/Downloads/of_v0.11.0_linuxarmv6l_release/examples/communication/networkUdpReceiverExample/bin/data/type/verdana.ttf'
+GUI_W, GUI_H = 1280, 720
+FONT_SIZE_1 = 28
+FONT_SIZE_2 = 18
+FONT_SIZE_3 = 14
+FRAME_W, FRAME_H = 640, 360
+FRAME_X, FRAME_Y = 50, 60
+FACE_W, FACE_H = 200, 200
+FACE_X, FACE_Y = 75, 500
+FACER_X, FACER_Y = 450, 500
+FACEG_X, FACEG_Y = 825, 500
+DASH_W, DASH_H = 480, 400
+DASH_X, DASH_Y = 740, 36
+INSET_DIM = 200
+
+# video and face tracking settings
+IDX_WEBCAM = 0
+#CASCADE_PATH = '/Users/gene/Downloads/Webcam-Face-Detect-master/haarcascade_frontalface_default.xml'
+MIN_FACE_AREA = 10000
+
+
+# set up gui
+font1 = ImageFont.truetype(FONT, FONT_SIZE_1)
+font2 = ImageFont.truetype(FONT, FONT_SIZE_2)
+font3 = ImageFont.truetype(FONT, FONT_SIZE_3)
+gui = Image.new('RGB', (GUI_W, GUI_H))
+ctx = ImageDraw.Draw(gui)
+
+# empty
+im_face_empty = Image.new('RGB', (FACE_W, FACE_H))
+ctx_empty = ImageDraw.Draw(im_face_empty)
+ctx_empty.rectangle((0, 0, FACE_W-1, FACE_H-1), fill='#222', outline='#00f') 
+
+# video and face capturing
+#faceCascade = cv2.CascadeClassifier(CASCADE_PATH)
+#log.basicConfig(filename='webcam.log',level=log.INFO)
+#video_capture = cv2.VideoCapture(IDX_WEBCAM)
 
 
 
@@ -61,8 +108,6 @@ person = files
 
 
 
-
-
 # if USE_PICAMERA:
 #     import picamera
 # else:
@@ -95,8 +140,12 @@ def search_for_face(frame, faceCascade):
         return None 
     else:  
         areas = [face[2] * face[3] for face in faces]
-        idx_max_area = areas.index(max(areas))
-        return faces[idx_max_area]
+        idx_top = np.argsort(areas)[-1]
+        if areas[idx_top] < MIN_FACE_AREA:
+            return None
+
+        return faces[idx_top]
+
 
 
 class Worker:
@@ -106,36 +155,32 @@ class Worker:
         READY_TO_UPDATE = 2
         WAITING = 3
 
-    def __init__(self, name, worker_ip, conductor_ip, conductor_port, syft_port, batch_size, data_input, hook):
+    def __init__(self, name, worker_ip, conductor_ip, conductor_port, syft_port, batch_size, hook, faceCascade):
         self.name = name
         self.worker_ip = worker_ip
         self.conductor_ip = conductor_ip
         self.conductor_port = conductor_port
         self.syft_port = syft_port
         self.batch_size = batch_size
-        self.input = data_input
         self.hook = hook
-
         self.registered = False
         self.active = False
-
         self.captures = []
+        self.current_capture = None
+        self.reconstructed_capture = None
+        self.random_image = None
         self.n_updates = 0
         self.socket_uri = 'ws://%s:%d' % (conductor_ip, conductor_port)
-
-        if self.input == 'cam':
-            self.camera = cv2.VideoCapture(0)
+        self.faceCascade = faceCascade
 
     def set_mode(self, mode):
         self.mode = mode
             
-    def setup_data(self, image_size):
+    def setup_data_source(self, data_input, image_size):
         self.image_size = image_size
-        trans = transforms.ToTensor() 
-        mnist_loader = torch.utils.data.DataLoader(
-            dataset=datasets.MNIST(root='./data', train=True, transform=trans, download=True), 
-            batch_size=self.batch_size, shuffle=True)
-        self.mnist_iterator = iter(mnist_loader)
+        self.input = data_input
+        if self.input == 'cam':
+            self.camera = cv2.VideoCapture(0)
 
     def ready_to_update(self):
         ready = (self.num_captures() == self.batch_size)
@@ -143,9 +188,6 @@ class Worker:
 
     def get_next_batch(self):
         print('Get next batch...')
-        # for c, cap in enumerate(self.captures):
-        #     print(cap.shape, cap.dtype)
-        #     Image.fromarray((255 * cap).astype(np.uint8)).save('batch%03d.png'%(c+1))
         data = np.array(self.captures)
         data = torch.tensor(np.mean(data, -1))
         self.x_ptr = data.tag('#x').send(self.local_worker)
@@ -173,23 +215,21 @@ class Worker:
             stream = io.BytesIO()
             with picamera.PiCamera() as camera:
                 camera.start_preview()
-                time.sleep(1)
+                #time.sleep(1)
                 camera.capture(stream, format='jpeg')
             stream.seek(0)
             image = np.array(Image.open(stream))
 
         elif self.input == 'lfw':
-            print('Get lfw input')
             idx_random = int(len(person) * random.random())
-            print(idx_random, len(person))
-            print('load %s'%person[idx_random])
+            print('Get lfw input %s (%d/%d)' % (person[idx_random], idx_random, len(person)))
             image = Image.open(person[idx_random]).convert('RGB')
             image = np.array(image)
 
-        face = search_for_face(image, faceCascade)
-        
+        self.image = image
+        face = search_for_face(image, self.faceCascade)
         if face is not None:
-            ih, iw = image.shape[0:2]
+            ih, iw = self.image.shape[0:2]
             x, y, w, h = face
 
             x1, x2 = int(x - 0.33 * w), int(x + 1.33 * w)
@@ -197,21 +237,169 @@ class Worker:
 
             if x1 < 0 or x2 >= iw or y1 < 0 or y2 >= ih:
                 print('Face not fully inside frame')
+                self.current_capture = None
                 return False 
 
             print('Found face inside', y1, y2, x1, x2)
-
-            # pick out face image
+        
+            # crop out face image
             image = image[y1:y2, x1:x2]
             image = cv2.resize(image, (64, 64), interpolation=cv2.INTER_CUBIC)
             image = np.array(image).astype(np.float32) / 255.
+            image = np.expand_dims(image, 0)
 
+            self.current_capture = image
             self.captures.append(image)
             return True
 
         else:
             print('No face found')
+            self.current_capture = None
             return False
+
+
+
+
+
+
+######################
+
+
+
+
+    def draw(self):
+        print("d1")
+
+        # dashboard data
+        time_running = '16:44'
+        num_peers = 4
+        name = 'worker_01'
+        ip_address = '108.205.10.82'
+        conductor_ip, conductor_port = '108.205.10.99', 7182
+        syft_port = 8182
+        num_updates = 16
+        last_updated_time, last_updated_ago = '2:45pm', 56
+        reconst_loss, kl_loss = 291.2923401, 5.7129323
+        model_type, num_params, batch_size = 'fully-connected VAE', 48812, 8 # 'convolutional'
+        #num_samples = len(self.captures)
+        current_status = 'Collecting samples' # 'Ready', 'Training
+
+        print("d2")
+        # # Capture frame-by-frame
+        # ret, frame = video_capture.read()
+        # currTime = time.strftime('%l:%M%p')
+
+        # face = search_for_face(frame, self.faceCascade)
+        # if face is not None:
+        #     x, y, w, h = face
+        #     frame_face = frame[y:y+h, x:x+w]
+        #     im_face = Image.fromarray(frame_face)
+        #     im_face = im_face.resize((FACE_W, FACE_H), Image.BICUBIC)
+        # else:
+        #     im_face = im_face_empty
+        #     # insert 
+            
+        print('d2a')
+        
+    
+
+
+
+    
+        # draw images
+        im_frame = Image.fromarray(self.image)
+        print('d2b')
+        im_frame = im_frame.resize((FRAME_W, FRAME_H), Image.BICUBIC)
+        print('d2c')
+        ctx.rectangle((0, 0, GUI_W, GUI_H), fill='#000', outline='#000')
+        print('d2d')
+        gui.paste(im_frame, (FRAME_X, FRAME_Y))
+        print('d2e')
+        if self.current_capture is None:
+            ctx.text((FRAME_X + 3, FRAME_Y + 2), "Place your face inside the red ellipse :)", font=font2, fill='#00f')
+            ctx.ellipse((FRAME_X + 20, FRAME_Y + 25, FRAME_X + FRAME_W - 20, FRAME_Y + FRAME_H - 20), width=12, fill=None, outline='#0000ff44')
+        else:
+            ctx.rectangle((FRAME_X, FRAME_Y, FRAME_X + FRAME_W, FRAME_Y + FRAME_H), width=8, fill=None, outline='#0f0')
+        print('d2f', type(self.current_capture))
+        #print(self.current_capture.dtype, self.current_capture.shape)
+        print('uhug')
+        #gui.paste(Image.fromarray(self.current_capture[0].astype(np.uint8)), (FACE_X, FACE_Y))
+        #print('dfjhksdf')
+        #print(gui)
+        #print(gui.paste)
+        if self.current_capture is not None:
+            print('in here', FACE_X)
+    #        gui.paste(self.current_capture, (FACE_X, FACE_Y))
+            print(self.current_capture.shape)
+            print(np.min(self.current_capture[0]), np.max(self.current_capture[0]))
+            img_capture = Image.fromarray((255 * self.current_capture[0]).astype(np.uint8))
+            print(img_capture)
+            img_capture = img_capture.resize((INSET_DIM, INSET_DIM), Image.NEAREST)
+            gui.paste(img_capture, (FACE_X, FACE_Y))
+        if self.reconstructed_capture is not None:
+            print('d2grecons')
+            #img_reconstructed0 = self.reconstructed_capture.astype(np.uint8)
+            #print(img_reconstructed0.shape)
+            #print(img_reconstructed0)
+            img_reconstructed = Image.fromarray(self.reconstructed_capture.astype(np.uint8))
+            img_reconstructed = img_reconstructed.resize((INSET_DIM, INSET_DIM), Image.NEAREST)
+            gui.paste(img_reconstructed, (FACER_X, FACER_Y))
+        #gui.paste(im_face, (FACEG_X, FACEG_Y))
+        
+        print('d2h')
+        # draw text for images
+        currTime = time.strftime('%l:%M%p')
+        ctx.text((FRAME_X, FRAME_Y - FONT_SIZE_1 - 5), "Camera feed %s" % currTime, font=font1, fill=(0, 255, 0, 255))
+        ctx.text((FACE_X, FACE_Y - FONT_SIZE_2 - 5), "detected", font=font2, fill=(0, 255, 0, 255))
+        ctx.text((FACER_X, FACER_Y - FONT_SIZE_2 - 5), "reconstructed", font=font2, fill=(0, 255, 0, 255))
+        ctx.text((FACEG_X, FACEG_Y - FONT_SIZE_2 - 5), "randomly generated", font=font2, fill=(0, 255, 0, 255))
+
+        print("d8")
+        
+        # draw dashboard
+        dashboard = Image.new('RGB', (DASH_W, DASH_H))
+        ctx_dash = ImageDraw.Draw(dashboard)
+        ctx_dash.rectangle((0, 0, DASH_W-1, DASH_H-1), fill=None, outline='#0f0') 
+        ctx_dash.rectangle((0, 0, DASH_W-1, FONT_SIZE_2+8), fill=None, outline='#0f0') 
+        ctx_dash.text((3, 3), "Dashboard", font=font2, fill=(0, 255, 0, 255))
+        for l, line in enumerate([
+            'Time running:  %s' % time_running,
+            'Number of peers:  %d' % num_peers,
+            'My name:  %s' % (name),
+            'My location:  %s:%d' % (ip_address, syft_port),
+            'Conductor location:  %s:%d' % (conductor_ip, conductor_port),
+            '',
+            'Model:  %s (%d parameters, batch size %d)' % (model_type, num_params, batch_size),
+            'Number of local updates:  %d' % num_updates,
+            'Last model update:  %s (%d min ago)' % (last_updated_time, last_updated_ago),
+            'Current reconstruction loss:  %0.2f' % reconst_loss,
+            'Current KL-divergence loss:  %0.2f' % kl_loss,
+            '',
+            'Current number of samples:  %d' % self.num_captures(),
+            'Current status:  %s %d' % (current_status, np.random.randint(1000))
+        ]):
+            ctx_dash.text((6, 15 + FONT_SIZE_2 + l * FONT_SIZE_3 * 1.4), line, font=font3, fill=(0, 255, 0, 255))
+        gui.paste(dashboard, (DASH_X, DASH_Y))
+
+        print("d9")
+        
+        # Display the resulting frame
+        #cv2.imshow('Video', np.array(gui))
+        return gui
+        #print("d10")
+        # if cv2.waitKey(1) & 0xFF == ord('q'):
+        #     break
+
+
+
+
+
+
+##############
+
+
+
+
 
     def num_captures(self):
         return len(self.captures)
@@ -235,12 +423,12 @@ class Worker:
             if result['success']:
                 print('Ready to make an update...')
     
-    async def check_if_in_queue(self):
+    async def ping_conductor(self):
         async with websockets.connect(self.socket_uri) as websocket:
-            message = json.dumps({'action': 'check_if_in_queue', 'name': self.name})
+            message = json.dumps({'action': 'ping_conductor', 'name': self.name})
             await websocket.send(message)
             result = json.loads(await websocket.recv())
-            return result['in_queue']
+            return result
 
 
 
@@ -259,23 +447,37 @@ async def update_worker(loop: asyncio.AbstractEventLoop, worker, faceCascade) ->
                 worker.set_mode(Worker.Mode.READY_TO_UPDATE)
 
         elif worker.mode == Worker.Mode.READY_TO_UPDATE:
-            worker.get_next_batch()
+            worker.get_next_batch() 
             await worker.request_update()
             worker.set_mode(Worker.Mode.WAITING)
 
         elif worker.mode == Worker.Mode.WAITING:
-            done = await worker.check_if_in_queue()
-            if done:
+            result = await worker.ping_conductor()            
+            if not result['in_queue']:
+                if 'user' in result:
+                    worker.reconstructed_capture = np.array(result['user']['reconstructed_image'])
+                    worker.random_image = np.array(result['user']['random_image'])
                 worker.n_updates += 1
+                worker.random_image = None
                 worker.captures = []
                 worker.set_mode(Worker.Mode.CAPTURING)
+        
+        global gui
+        gui = worker.draw()
+        
+        #time.sleep(0.25)
 
-        time.sleep(1)
-    
 
-def start_background_loop(loop: asyncio.AbstractEventLoop, worker, faceCascade) -> None:
+def start_background_thread(loop: asyncio.AbstractEventLoop, worker, faceCascade) -> None:
     asyncio.set_event_loop(loop)
     asyncio.run_coroutine_threadsafe(update_worker(loop, worker, faceCascade), loop)
+    loop.run_forever()
+
+
+def start_worker_thread(loop: asyncio.AbstractEventLoop, worker) -> None:
+    asyncio.set_event_loop(loop)
+    #asyncio.run_coroutine_threadsafe(launch_worker(loop, worker, faceCascade), loop)
+    worker.activate()
     loop.run_forever()
 
 
@@ -300,18 +502,30 @@ def main():
     # setup worker
     hook = sy.TorchHook(torch)
     worker_ip = get_local_ip_address() if args.worker_ip == 'auto' else args.worker_ip
-    worker = Worker(args.name, worker_ip, args.conductor_ip, args.conductor_port, args.syft_port, args.batch_size, args.input, hook)    
-    worker.setup_data(64 * 64)
+    worker = Worker(args.name, worker_ip, args.conductor_ip, args.conductor_port, args.syft_port, args.batch_size, hook, faceCascade)
+    worker.setup_data_source(args.input, 64 * 64)
     worker.set_mode(Worker.Mode.CAPTURING)
 
     # setup update thread
     loop = asyncio.new_event_loop()
-    update_thread = Thread(target=start_background_loop, args=(loop, worker, faceCascade,), daemon=True)
+    update_thread = Thread(target=start_background_thread, args=(loop, worker, faceCascade,), daemon=True)
     update_thread.start()
 
-    # launch syft worker
-    worker.activate()
+    # launch syft worker in thread
+    loop2 = asyncio.new_event_loop()
+    worker_thread = Thread(target=start_worker_thread, args=(loop2, worker,), daemon=True)
+    worker_thread.start()
 
-    
+    # draw gui
+    while True:
+        if gui == None:
+            continue
+        cv2.imshow('Video', np.array(gui))
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+        #time.sleep(1)
+
+
+
 if __name__== "__main__":
     main()

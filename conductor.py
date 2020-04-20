@@ -1,6 +1,7 @@
 from threading import Thread
 import argparse
 import json
+from json import JSONEncoder
 import time
 import asyncio
 import websockets
@@ -14,13 +15,21 @@ import syft as sy
 from syft.workers.websocket_client import WebsocketClientWorker
 from models import VAE, ConvVAE
 
+
+class NumpyArrayEncoder(JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return JSONEncoder.default(self, obj)
+
+
 class CheckableQueue(queue.Queue): 
     def __contains__(self, item):
         with self.mutex:
             return item in self.queue
 
 
-async def handle_worker(websocket, path, hook, workers, update_queue, model, optimizer, learning_rate, verbose=False):
+async def handle_worker(websocket, path, hook, workers, update_queue, results_box, model, optimizer, learning_rate, verbose=False):
     message = await websocket.recv()
     message = json.loads(message)
 
@@ -40,12 +49,15 @@ async def handle_worker(websocket, path, hook, workers, update_queue, model, opt
         message = json.dumps({'success': True})
         await websocket.send(message)
 
-    elif action == 'check_if_in_queue':
-        message = json.dumps({'in_queue': name not in update_queue})
+    elif action == 'ping_conductor':
+        result = {'in_queue': name not in update_queue}
+        if not result['in_queue'] and name in results_box:
+            result['user'] = results_box[name]
+        message = json.dumps(result, cls=NumpyArrayEncoder)
         await websocket.send(message)
 
 
-async def update_model(loop: asyncio.AbstractEventLoop, workers, model, optimizer, image_dim, update_queue) -> None:
+async def update_model(loop: asyncio.AbstractEventLoop, workers, model, optimizer, image_dim, update_queue, results_box) -> None:
     batch = 1
     model.train()
 
@@ -53,11 +65,11 @@ async def update_model(loop: asyncio.AbstractEventLoop, workers, model, optimize
         
         while not update_queue.empty():
 
-            next_worker_name = update_queue.queue[0]
-            print('Update requested from %s' % next_worker_name)
-            
+            worker_name = update_queue.queue[0]
+            print('Update requested from %s' % worker_name)
+
             # send model to the worker
-            worker = workers[next_worker_name]
+            worker = workers[worker_name]
             model.send(worker)
             
             # forward pass with pointer to batch from worker
@@ -73,27 +85,30 @@ async def update_model(loop: asyncio.AbstractEventLoop, workers, model, optimize
             optimizer[worker].zero_grad()
             loss.backward()
             optimizer[worker].step()
-            print("Reconstruction Loss: {:.4f}, KL Divergence: {:.4f}".format(reconst_loss.get(), kl_div.get()))
-
-            # get back the model, update queue
-            model.get()
-            update_queue.get()
+            reconst_loss_f, kl_div_f = reconst_loss.get().detach(), kl_div.get().detach()
+            print("Reconstruction Loss: {:.4f}, KL Divergence: {:.4f}".format(reconst_loss_f, kl_div_f))
 
             # draw first reconstructed sample 
+            #  note: should be done by client
             reconstructed_samples = x_reconst.get()
             batch_size = reconstructed_samples.shape[0]
             reconstructed_samples = reconstructed_samples.reshape([batch_size, image_dim, image_dim])
             reconstructed_samples = (255 * reconstructed_samples.detach().numpy()).astype(np.uint8)
             Image.fromarray(reconstructed_samples[0]).save('reconstructed_%03d.png' % batch)
-            
+            results_box[worker_name] = {'success': True, 'reconstruction_loss': reconst_loss_f.item(), 'kl_loss': kl_div_f.item(), 'reconstructed_image': reconstructed_samples[0], 'random_image': reconstructed_samples[0]}
+
+            # get back the model, update queue
+            model.get()
+            update_queue.get()
+
             batch += 1
 
         time.sleep(1)
 
 
-def start_background_loop(loop: asyncio.AbstractEventLoop, workers, model, optimizer, image_dim, update_queue) -> None:
+def start_background_loop(loop: asyncio.AbstractEventLoop, workers, model, optimizer, image_dim, update_queue, results_box) -> None:
     asyncio.set_event_loop(loop)
-    asyncio.run_coroutine_threadsafe(update_model(loop, workers, model, optimizer, image_dim, update_queue), loop)
+    asyncio.run_coroutine_threadsafe(update_model(loop, workers, model, optimizer, image_dim, update_queue, results_box), loop)
     loop.run_forever()
 
 
@@ -122,17 +137,17 @@ def main():
         model = ConvVAE(z_dim=args.z_dim).to(device)
     
     optimizer = {}
-    workers, update_queue = {}, CheckableQueue()
+    workers, results_box, update_queue = {}, {}, CheckableQueue()
     
     # setup update thread
     loop = asyncio.new_event_loop()
-    update_thread = Thread(target=start_background_loop, args=(loop, workers, model, optimizer, args.image_dim, update_queue), daemon=True)
+    update_thread = Thread(target=start_background_loop, args=(loop, workers, model, optimizer, args.image_dim, update_queue, results_box), daemon=True)
     update_thread.start()
 
     # start update thread
     hook = sy.TorchHook(torch)
     start_server = websockets.serve(
-        functools.partial(handle_worker, hook=hook, workers=workers, update_queue=update_queue, model=model, optimizer=optimizer, learning_rate=args.learning_rate, verbose=args.verbose),
+        functools.partial(handle_worker, hook=hook, workers=workers, update_queue=update_queue, results_box=results_box, model=model, optimizer=optimizer, learning_rate=args.learning_rate, verbose=args.verbose),
         args.server_ip, args.server_port)
     asyncio.get_event_loop().run_until_complete(start_server)
     asyncio.get_event_loop().run_forever()
