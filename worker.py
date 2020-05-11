@@ -24,9 +24,7 @@ from util import *
 parser = argparse.ArgumentParser(description="Run websocket server worker.")
 parser.add_argument("--name", type=str, default=None, help="name of the worker, e.g. worker001, generates random name if not set")
 parser.add_argument("--worker_ip", type=str, default="auto", help="ip address of worker (if \"auto\", then find automatically, otherwise override")
-parser.add_argument("--conductor_ip", type=str, default="0.0.0.0", help="host for the socket connection")
-parser.add_argument("--conductor_port", type=int, default=8765, help="port number of the websocket server worker, e.g. --conductor_port 8765")
-# parser.add_argument("--syft_port", type=int, help="port for syft worker")
+parser.add_argument("--conductor_ip", type=str, default="0.0.0.0:8765", help="host for the socket connection")
 parser.add_argument("--image_size", type=int, default=64, help="dimension of input images")
 parser.add_argument("--batch_size", type=int, default=8, help="number of batches")
 parser.add_argument("--input", type=str, choices=['cam', 'picam', 'lfw'], default='lfw', help="input data source (cam, picam, lfw)")
@@ -74,44 +72,6 @@ ctx_empty.rectangle((0, 0, FACE_W-1, FACE_H-1), fill='#222', outline='#00f')
 
 
 
-##########
-# import fnmatch
-# import os
-# import matplotlib.pyplot as plt
-# from PIL import Image
-# import numpy as np
-# from tqdm import tqdm
-# import random
-# from sklearn.decomposition import PCA
-# from random import shuffle
-# import glob
-
-# lfw_path = "/Users/gene/Downloads/lfw-deepfunneled"
-
-# people = {}
-# for root, dirnames, filenames in os.walk(lfw_path):
-#     for filename in fnmatch.filter(filenames, '*.jpg'):
-#         name = root.split('/')[-1]
-#         if name in people:
-#             people[name].append(os.path.join(root, filename))
-#         else:
-#             people[name] = [os.path.join(root, filename)]
-
-# all_names = [name for name in people]
-# nums = [len(people[name]) for name in people]
-# idx = list(reversed(np.argsort(nums)))
-# top_names = [all_names[i] for i in idx]
-# person = people[top_names[0]]
-# files = glob.glob('%s/*/*.jpg' % lfw_path)
-# person = files
-#######
-
-
-
-
-
-
-
 def search_for_face(frame, faceCascade):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = faceCascade.detectMultiScale(
@@ -139,11 +99,10 @@ class Worker:
         READY_TO_UPDATE = 2
         WAITING = 3
 
-    def __init__(self, name, worker_ip, conductor_ip, conductor_port, batch_size, hook, faceCascade, verbose):
+    def __init__(self, name, worker_ip, conductor_ip, batch_size, hook, faceCascade, verbose):
         self.name = name
         self.worker_ip = worker_ip
         self.conductor_ip = conductor_ip
-        self.conductor_port = conductor_port
         self.syft_port = None
         self.num_peers = 0
         self.batch_size = batch_size
@@ -157,7 +116,8 @@ class Worker:
         self.reconstruction_loss = 0
         self.kl_loss = 0
         self.random_image = None
-        self.socket_uri = 'ws://%s:%d' % (conductor_ip, conductor_port)
+        #self.socket_uri = 'ws://%s:%d' % (conductor_ip, conductor_port)
+        self.socket_uri = conductor_ip
         self.faceCascade = faceCascade
         self.waiting_for_conductor = False
         self.last_updated_time = None
@@ -319,9 +279,9 @@ class Worker:
             '',
             'Time running:  %s' % time_running,
             'Number of peers:  %d' % self.num_peers,
-            'My name:  %s' % (self.name),
+            'My name:  %s' % self.name,
             'My location:  %s:%d' % (self.worker_ip, self.syft_port),
-            'Conductor location:  %s:%d' % (self.conductor_ip, self.conductor_port),
+            'Conductor location:  %s' % self.conductor_ip,
             '',
             'Model:  %s (%d parameters, batch size %d)' % (model_type, num_params, self.batch_size),
             'Number of local updates:  %d' % self.num_updates,
@@ -454,7 +414,7 @@ def main():
     worker_ip = get_local_ip_address() if args.worker_ip == 'auto' else args.worker_ip
     faceCascade = cv2.CascadeClassifier(args.cascadeFile)
     
-    worker = Worker(name, worker_ip, args.conductor_ip, args.conductor_port, args.batch_size, hook, faceCascade, verbose)
+    worker = Worker(name, worker_ip, args.conductor_ip, args.batch_size, hook, faceCascade, verbose)
     worker.setup_data_source(args.input, args.image_size) # * args.image_size)
     worker.set_mode(Worker.Mode.COLLECTING)
     if args.input == 'lfw':

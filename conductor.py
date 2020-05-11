@@ -81,7 +81,7 @@ async def update_model(loop: asyncio.AbstractEventLoop, workers, model, optimize
             worker_name = update_queue.queue[0]
             log('Update requested from %s' % worker_name, verbose)
             worker = workers[worker_name]
-            log('Send model to %s' % worker_name, verbose)
+            log('Send model to %s'  % worker_name, verbose)
             model.send(worker)
             
             # forward pass with pointer to batch from worker
