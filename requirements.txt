@@ -1,6 +1,6 @@
 numpy==1.18.2
 opencv-python==4.2.0.34
-Pillow==6.2.2
+Pillow==8.3.2
 syft==0.2.3
 syft-proto==0.2.1a1.post2
 torch==1.4.0
